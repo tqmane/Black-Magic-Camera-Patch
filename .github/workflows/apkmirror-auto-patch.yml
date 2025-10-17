@@ -1,0 +1,129 @@
+name: APKMirror Auto Patch
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apkmirror-auto-patch
+  cancel-in-progress: false
+
+jobs:
+  auto-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            build-tools;34.0.0
+            platforms;android-34
+            platform-tools
+
+      - name: Check APKMirror for latest Blackmagic Camera
+        id: check
+        run: |
+          python scripts/check_apkmirror.py --out build/latest.json
+          echo "json=$(cat build/latest.json)" >> $GITHUB_OUTPUT
+          has_update=$(jq -r '.has_update' build/latest.json || echo false)
+          echo "has_update=$has_update" >> $GITHUB_OUTPUT
+          version=$(jq -r '.version // ""' build/latest.json)
+          echo "version=$version" >> $GITHUB_OUTPUT
+          apk_path=$(jq -r '.apk_path // ""' build/latest.json)
+          echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
+
+      - name: Stop if no update
+        if: steps.check.outputs.has_update != 'true'
+        run: |
+          echo "No update found. Exiting."
+
+      - name: Detect keystore presence
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          if [ -n "${{ secrets.BLACKMAGIC_KEYSTORE_B64 }}" ] && [ -n "${{ secrets.BLACKMAGIC_KEY_ALIAS }}" ] && [ -n "${{ secrets.BLACKMAGIC_KEYSTORE_PASSWORD }}" ] && [ -n "${{ secrets.BLACKMAGIC_KEY_PASSWORD }}" ]; then
+            echo "HAS_KEYSTORE=true" >> $GITHUB_ENV
+          else
+            echo "HAS_KEYSTORE=false" >> $GITHUB_ENV
+          fi
+
+      - name: Prepare keystore (if provided)
+        if: steps.check.outputs.has_update == 'true' && env.HAS_KEYSTORE == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.BLACKMAGIC_KEYSTORE_B64 }}
+        run: |
+          mkdir -p build
+          echo "$KEYSTORE_B64" | base64 -d > build/blackmagic.keystore
+        shell: bash
+
+      - name: Decode, apply patch, and build
+        if: steps.check.outputs.has_update == 'true'
+        id: build
+        env:
+          ZIPALIGN: ${{ env.ANDROID_SDK_ROOT }}/build-tools/34.0.0/zipalign
+          APKSIGNER: ${{ env.ANDROID_SDK_ROOT }}/build-tools/34.0.0/apksigner
+          KEY_ALIAS: ${{ secrets.BLACKMAGIC_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.BLACKMAGIC_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.BLACKMAGIC_KEY_PASSWORD }}
+        run: |
+          python scripts/decode_and_apply_patch.py \
+            --apk "${{ steps.check.outputs.apk_path }}" \
+            --apktool ./apktool.jar \
+            --workdir build/work
+
+          python scripts/build_and_sign.py \
+            --decoded build/work/decoded_apk \
+            --dist dist \
+            --zipalign "$ZIPALIGN" \
+            --apksigner "$APKSIGNER" \
+            --keystore build/blackmagic.keystore \
+            --key-alias "$KEY_ALIAS" \
+            --keystore-pass "$KEYSTORE_PASSWORD" \
+            --key-pass "$KEY_PASSWORD" \
+            --version "${{ steps.check.outputs.version }}" \
+            --maybe-unsigned $([ "$HAS_KEYSTORE" = "true" ] || echo "--unsigned-only")
+
+      - name: Upload artifacts
+        if: steps.check.outputs.has_update == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackmagic-mod-${{ steps.check.outputs.version }}
+          path: |
+            dist/*.apk
+            build/work/*.txt
+
+      - name: Create GitHub release
+        if: steps.check.outputs.has_update == 'true' && env.HAS_KEYSTORE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: blackmagic-${{ steps.check.outputs.version }}
+          name: Blackmagic Camera Mod ${{ steps.check.outputs.version }}
+          body: |
+            Automated build from APKMirror.
+            Version: ${{ steps.check.outputs.version }}
+          files: |
+            dist/*_signed.apk
+
+
