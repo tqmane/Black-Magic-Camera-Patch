@@ -182,6 +182,9 @@ def main() -> int:
     parser.add_argument("--app-url", default=os.environ.get("APKMIRROR_APP_URL", DEFAULT_APP_URL))
     parser.add_argument("--out", default="build/latest.json")
     parser.add_argument("--download-out", default="build/latest.apk")
+    parser.add_argument("--fallback-apk", default="")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--skip-release-check", action="store_true")
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -201,7 +204,7 @@ def main() -> int:
         return 0
 
     tag = f"blackmagic-{version}"
-    exists = _github_release_exists(tag)
+    exists = False if args.skip_release_check else _github_release_exists(tag)
     has_update = not exists
 
     apk_path = ""
@@ -214,7 +217,12 @@ def main() -> int:
             apk_path = args.download_out
         except Exception as e:
             print(f"WARN: Failed to download APK: {e}")
-            has_update = False
+            apk_path = ""
+
+    # Fallbacks
+    if (not apk_path) and args.fallback_apk and os.path.isfile(args.fallback_apk):
+        apk_path = os.path.abspath(args.fallback_apk)
+        has_update = True if args.force else has_update
 
     payload = {
         "has_update": bool(has_update),

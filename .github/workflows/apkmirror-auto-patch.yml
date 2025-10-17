@@ -4,6 +4,20 @@ on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force run even if no new release detected'
+        required: false
+        type: boolean
+        default: false
+      app_url:
+        description: 'Override APKMirror app URL'
+        required: false
+        type: string
+      fallback_apk:
+        description: 'Path to local APK to use if download fails (optional)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -46,7 +60,13 @@ jobs:
       - name: Check APKMirror for latest Blackmagic Camera
         id: check
         run: |
-          python scripts/check_apkmirror.py --out build/latest.json
+          APP_URL_ARG=""
+          if [ -n "${{ inputs.app_url }}" ]; then APP_URL_ARG="--app-url '${{ inputs.app_url }}'"; fi
+          FALLBACK_ARG=""
+          if [ -n "${{ inputs.fallback_apk }}" ]; then FALLBACK_ARG="--fallback-apk '${{ inputs.fallback_apk }}'"; elif [ -f "Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk" ]; then FALLBACK_ARG="--fallback-apk 'Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk'"; fi
+          FORCE_ARG=""
+          if [ "${{ inputs.force }}" = "true" ]; then FORCE_ARG="--force --skip-release-check"; fi
+          python scripts/check_apkmirror.py $APP_URL_ARG $FALLBACK_ARG $FORCE_ARG --out build/latest.json
           has_update=$(jq -r '.has_update' build/latest.json || echo false)
           echo "has_update=$has_update" >> $GITHUB_OUTPUT
           version=$(jq -r '.version // ""' build/latest.json)
@@ -55,7 +75,7 @@ jobs:
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
 
       - name: Stop if no update
-        if: steps.check.outputs.has_update != 'true'
+        if: steps.check.outputs.has_update != 'true' && inputs.force != true
         run: |
           echo "No update found. Exiting."
 
@@ -78,7 +98,7 @@ jobs:
         shell: bash
 
       - name: Decode, apply patch, and build
-        if: steps.check.outputs.has_update == 'true'
+        if: steps.check.outputs.has_update == 'true' || inputs.force == true
         id: build
         env:
           ZIPALIGN: ${{ env.ANDROID_SDK_ROOT }}/build-tools/34.0.0/zipalign
