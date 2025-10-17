@@ -47,7 +47,6 @@ jobs:
         id: check
         run: |
           python scripts/check_apkmirror.py --out build/latest.json
-          echo "json=$(cat build/latest.json)" >> $GITHUB_OUTPUT
           has_update=$(jq -r '.has_update' build/latest.json || echo false)
           echo "has_update=$has_update" >> $GITHUB_OUTPUT
           version=$(jq -r '.version // ""' build/latest.json)

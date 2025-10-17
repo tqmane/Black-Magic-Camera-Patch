@@ -41,11 +41,25 @@ def _soup_get(url: str) -> BeautifulSoup:
 
 def _find_latest_release_url(app_url: str) -> Tuple[str, str]:
     soup = _soup_get(app_url)
-    # Heuristic: first release card link under app page
-    link = soup.select_one('a[href*="/apk/blackmagic-design/blackmagic-camera/"][class*="fontBlack"]')
-    if not link:
-        # fallback: any release link with "/release/" in href
-        link = soup.select_one('a[href*="/release/"]')
+    # 1) Try new app page cards
+    selectors = [
+        'div.listWidget a.fontBlack[href*="/release/"]',
+        'a.fontBlack[href*="/release/"]',
+        'a[href*="/download/"], a[href*="/variant/"]',
+    ]
+    link = None
+    for sel in selectors:
+        link = soup.select_one(sel)
+        if link and link.get("href"):
+            break
+    if not link or not link.get("href"):
+        # 2) Fallback to all versions page
+        all_versions = soup.find("a", href=True, string=lambda t: t and "All versions" in t)
+        if all_versions:
+            href = all_versions.get("href")
+            versions_url = href if href.startswith("http") else ("https://www.apkmirror.com" + href)
+            soup2 = _soup_get(versions_url)
+            link = soup2.select_one('a.fontBlack[href*="/release/"]') or soup2.select_one('a[href*="/release/"]')
     if not link or not link.get("href"):
         raise RuntimeError("Could not locate latest release link on APKMirror app page.")
     href = link["href"]
@@ -180,8 +194,9 @@ def main() -> int:
         final_url = _resolve_final_download(download_page) if download_page else None
     except Exception as e:
         data = {"has_update": False, "error": str(e)}
+        os.makedirs(os.path.dirname(args.out), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
         print(f"ERROR: {e}")
         return 0
 
@@ -211,7 +226,7 @@ def main() -> int:
         "apk_path": apk_path,
     }
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False)
     print(json.dumps(payload))
     return 0
 
