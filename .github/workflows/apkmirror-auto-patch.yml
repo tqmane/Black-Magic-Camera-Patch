@@ -73,17 +73,36 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           apk_path=$(jq -r '.apk_path // ""' build/latest.json)
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
+          download_url=$(jq -r '.download_url // ""' build/latest.json)
+          echo "download_url=$download_url" >> $GITHUB_OUTPUT
+
+      - name: Try download APK from checker URL
+        id: try_dl
+        if: steps.check.outputs.apk_path == '' && steps.check.outputs.download_url != ''
+        run: |
+          mkdir -p build
+          echo "Attempting to download APK from checker-provided URL..."
+          curl -L --fail -o build/from_checker.apk "${{ steps.check.outputs.download_url }}" || true
+          if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Resolve APK path
         id: resolve_apk
         run: |
-          final_apk="${{ steps.check.outputs.apk_path }}"
+          final_apk="${{ steps.try_dl.outputs.apk_path }}"
+          if [ -z "$final_apk" ]; then
+            final_apk="${{ steps.check.outputs.apk_path }}"
+          fi
           if [ -z "$final_apk" ]; then
             if [ -n "${{ inputs.fallback_apk }}" ] && [ -f "${{ inputs.fallback_apk }}" ]; then
               final_apk="${{ inputs.fallback_apk }}"
             elif [ -f "Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk" ]; then
               final_apk="Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk"
             fi
+          fi
+          if [ -z "$final_apk" ]; then
+            # last-resort: pick largest APK found in repo
+            cand=$(find . -maxdepth 3 -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
+            if [ -n "$cand" ] && [ -f "$cand" ]; then final_apk="$cand"; fi
           fi
           if [ -z "$final_apk" ] || [ ! -f "$final_apk" ]; then
             echo "final_apk=" >> $GITHUB_OUTPUT
