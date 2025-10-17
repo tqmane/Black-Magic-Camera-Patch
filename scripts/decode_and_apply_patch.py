@@ -23,12 +23,30 @@ def main() -> int:
     decoded_dir = os.path.join(workdir, "decoded_apk")
     os.makedirs(workdir, exist_ok=True)
 
+    # Validate inputs
+    apk_path = os.path.abspath(args.apk)
+    if not os.path.isfile(apk_path):
+        print(f"ERROR: APK not found: {apk_path}")
+        return 2
+
+    apktool_path = os.path.abspath(args.apktool)
+    if not os.path.isfile(apktool_path):
+        # Try to download apktool.jar locally
+        try:
+            import urllib.request
+            url = "https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar"
+            print(f"apktool.jar not found. Downloading {url} ...")
+            urllib.request.urlretrieve(url, apktool_path)
+        except Exception as e:
+            print(f"ERROR: apktool.jar not found and auto-download failed: {e}")
+            return 2
+
     # Clean previous
     if os.path.exists(decoded_dir):
         shutil.rmtree(decoded_dir)
 
     # Decode
-    run(["java", "-jar", os.path.abspath(args.apktool), "d", "-f", os.path.abspath(args.apk), "-o", decoded_dir])
+    run(["java", "-jar", apktool_path, "d", "-f", apk_path, "-o", decoded_dir])
 
     # Apply patch (targets decoded_apk paths)
     patch_path = os.path.abspath(args.patch_file)

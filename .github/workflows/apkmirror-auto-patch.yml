@@ -74,6 +74,30 @@ jobs:
           apk_path=$(jq -r '.apk_path // ""' build/latest.json)
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
 
+      - name: Resolve APK path
+        id: resolve_apk
+        run: |
+          final_apk="${{ steps.check.outputs.apk_path }}"
+          if [ -z "$final_apk" ]; then
+            if [ -n "${{ inputs.fallback_apk }}" ] && [ -f "${{ inputs.fallback_apk }}" ]; then
+              final_apk="${{ inputs.fallback_apk }}"
+            elif [ -f "Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk" ]; then
+              final_apk="Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk"
+            fi
+          fi
+          if [ -z "$final_apk" ] || [ ! -f "$final_apk" ]; then
+            echo "final_apk=" >> $GITHUB_OUTPUT
+          else
+            echo "final_apk=$final_apk" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure apktool.jar
+        run: |
+          if [ ! -f apktool.jar ]; then
+            echo "Downloading apktool.jar ..."
+            curl -L -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+          fi
+
       - name: Stop if no update
         if: steps.check.outputs.has_update != 'true' && inputs.force != true
         run: |
@@ -98,7 +122,7 @@ jobs:
         shell: bash
 
       - name: Decode, apply patch, and build
-        if: steps.check.outputs.has_update == 'true' || inputs.force == true
+        if: (steps.check.outputs.has_update == 'true' || inputs.force == true) && steps.resolve_apk.outputs.final_apk != ''
         id: build
         env:
           ZIPALIGN: ${{ env.ANDROID_SDK_ROOT }}/build-tools/34.0.0/zipalign
@@ -108,7 +132,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.BLACKMAGIC_KEY_PASSWORD }}
         run: |
           python scripts/decode_and_apply_patch.py \
-            --apk "${{ steps.check.outputs.apk_path }}" \
+            --apk "${{ steps.resolve_apk.outputs.final_apk }}" \
             --apktool ./apktool.jar \
             --workdir build/work
 
@@ -123,6 +147,12 @@ jobs:
             --key-pass "$KEY_PASSWORD" \
             --version "${{ steps.check.outputs.version }}" \
             --maybe-unsigned $([ "$HAS_KEYSTORE" = "true" ] || echo "--unsigned-only")
+
+      - name: Fail if APK is unresolved
+        if: (steps.check.outputs.has_update == 'true' || inputs.force == true) && steps.resolve_apk.outputs.final_apk == ''
+        run: |
+          echo "ERROR: APK path could not be resolved. Ensure fallback_apk exists or let checker download it." >&2
+          exit 1
 
       - name: Upload artifacts
         if: steps.check.outputs.has_update == 'true'
