@@ -97,8 +97,8 @@ def _choose_preferred_variant(variants_url: str) -> Optional[str]:
         href = a["href"]
         if "variant" not in href and "apk/blackmagic-design/" not in href:
             continue
-        # Filtering heuristics
-        is_apk = "apk" in text and "bundle" not in text
+        # Filtering heuristics (allow bundle too so we can reach download page for .apkm)
+        is_apk = "apk" in text
         arch_ok = ("arm64-v8a" in text) or ("universal" in text) or ("all" in text)
         dpi_ok = ("nodpi" in text) or ("all dpi" in text) or ("dpi" not in text)
         if is_apk and arch_ok:
@@ -125,11 +125,14 @@ def _choose_preferred_variant(variants_url: str) -> Optional[str]:
 
 def _find_download_page(variant_url: str) -> Optional[str]:
     soup = _soup_get(variant_url)
-    # Look for Download APK button
-    a = soup.find("a", string=lambda t: t and "download apk" in t.lower())
+    # Look for Download APK or Download APK Bundle button
+    a = soup.find("a", string=lambda t: t and ("download apk" in t.lower() or "download apk bundle" in t.lower()))
     if not a:
         # Sometimes the button has an id or class
         a = soup.select_one("a.downloadButton, a.btn.btn-flat.downloadButton")
+    if not a:
+        # fallback: any link containing /download/
+        a = soup.find("a", href=lambda h: h and "/download/" in h)
     if not a:
         return None
     href = a.get("href")
