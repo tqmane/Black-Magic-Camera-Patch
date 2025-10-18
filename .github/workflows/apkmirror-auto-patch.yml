@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -99,9 +101,11 @@ jobs:
               final_apk="Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk"
             fi
           fi
+          echo "Listing APKs in workspace (for debugging):"
+          find . -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | head -50 || true
           if [ -z "$final_apk" ]; then
-            # last-resort: pick largest APK found in repo
-            cand=$(find . -maxdepth 3 -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
+            # last-resort: pick largest APK found in repo (recursive)
+            cand=$(find . -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
             if [ -n "$cand" ] && [ -f "$cand" ]; then final_apk="$cand"; fi
           fi
           if [ -z "$final_apk" ] || [ ! -f "$final_apk" ]; then
