@@ -18,10 +18,6 @@ on:
         description: 'Path to local APK to use if download fails (optional)'
         required: false
         type: string
-      fallback_apk_url:
-        description: 'Direct URL to .apk/.apkm to use if APKMirror download fails (optional)'
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -44,15 +40,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python dependencies
+      - name: Install shell deps
         run: |
-          python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          sudo apt-get update
+          sudo apt-get install -y jq zip unzip curl
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -77,7 +68,7 @@ jobs:
           if [ -n "${{ inputs.fallback_apk }}" ]; then FALLBACK_ARG="--fallback-apk '${{ inputs.fallback_apk }}'"; elif [ -f "Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk" ]; then FALLBACK_ARG="--fallback-apk 'Blackmagic Camera_v3.0.2.0016(78)_antisplit.apk'"; fi
           FORCE_ARG=""
           if [ "${{ inputs.force }}" = "true" ]; then FORCE_ARG="--force --skip-release-check"; fi
-          python scripts/check_apkmirror.py $APP_URL_ARG $FALLBACK_ARG $FORCE_ARG --out build/latest.json
+          bash scripts/check_apkmirror.sh $APP_URL_ARG $FALLBACK_ARG $FORCE_ARG --out build/latest.json
           has_update=$(jq -r '.has_update' build/latest.json || echo false)
           echo "has_update=$has_update" >> $GITHUB_OUTPUT
           version=$(jq -r '.version // ""' build/latest.json)
@@ -86,53 +77,10 @@ jobs:
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
           download_url=$(jq -r '.download_url // ""' build/latest.json)
           echo "download_url=$download_url" >> $GITHUB_OUTPUT
-          download_page=$(jq -r '.download_page // ""' build/latest.json)
-          echo "download_page=$download_page" >> $GITHUB_OUTPUT
           package_type=$(jq -r '.package_type // "unknown"' build/latest.json)
           echo "package_type=$package_type" >> $GITHUB_OUTPUT
           note=$(jq -r '.note // ""' build/latest.json)
           echo "note=$note" >> $GITHUB_OUTPUT
-
-      - name: Try download via apkmirror-downloader
-        id: apkmd
-        if: steps.check.outputs.apk_path == ''
-        run: |
-          mkdir -p build
-          echo "Attempting download via apkmirror-downloader (APK)..."
-          npm i --no-save apkmirror-downloader@latest || true
-          cat > scripts/apkmd_fetch.mjs <<'EOF'
-          import { APKMirrorDownloader } from 'apkmirror-downloader';
-          import fs from 'node:fs';
-          import path from 'node:path';
-          const outDir = 'build';
-          const type = process.env.TYPE || 'apk';
-          const org = process.env.ORG || 'blackmagic-design';
-          const repo = process.env.REPO || 'blackmagic-camera';
-          const outFile = type === 'apk' ? 'from_apkmd.apk' : 'from_apkmd.apkm';
-          const downloader = new APKMirrorDownloader({ outDir, overwrite: true, arch: 'universal', dpi: 'nodpi' });
-          try {
-            await downloader.download({ org, repo }, { type, outFile });
-            const p = path.resolve(outDir, outFile);
-            if (fs.existsSync(p) && fs.statSync(p).size > 1024*1024) {
-              console.log('OK ' + p);
-              process.exit(0);
-            }
-          } catch (e) {
-            console.error('ERR', e?.message || e);
-          }
-          process.exit(2);
-          EOF
-          node scripts/apkmd_fetch.mjs || true
-          if [ -f build/from_apkmd.apk ]; then echo "apk_path=$(pwd)/build/from_apkmd.apk" >> $GITHUB_OUTPUT; fi
-          if [ ! -f build/from_apkmd.apk ]; then
-            echo "Attempting download via apkmirror-downloader (Bundle)..."
-            TYPE=bundle node scripts/apkmd_fetch.mjs || true
-          fi
-          if [ -f build/from_apkmd.apkm ]; then
-            echo "Extracting from .apkm (apkmd) ..."
-            python scripts/extract_from_apkm.py --apkm build/from_apkmd.apkm --out build/from_apkmd_extracted.apk || true
-          fi
-          if [ -f build/from_apkmd_extracted.apk ]; then echo "apk_path=$(pwd)/build/from_apkmd_extracted.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Try download APK from checker URL
         id: try_dl
@@ -145,66 +93,33 @@ jobs:
             apkm) EXT="apkm" ;;
             xapk) EXT="xapk" ;;
           esac
-          REF="${{ steps.check.outputs.download_page }}"
-          if [ -z "$REF" ]; then REF="https://www.apkmirror.com/"; fi
-          curl -L --fail -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" -H "Referer: $REF" -o build/from_checker.$EXT "${{ steps.check.outputs.download_url }}" || true
+          curl -L --fail -o build/from_checker.$EXT "${{ steps.check.outputs.download_url }}" || true
           if [ -f build/from_checker.apkm ]; then
             echo "Extracting from .apkm ..."
-            python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker.apk || true
+            bash scripts/extract_from_apkm.sh --apkm build/from_checker.apkm --out build/from_checker.apk
           fi
-          if [ -f build/from_checker.xapk ]; then
-            echo "Extracting from .xapk ..."
-            python scripts/extract_from_apkm.py --apkm build/from_checker.xapk --out build/from_checker.apk || true
-          fi
-          # Validate APK; if invalid ZIP, try extracting as APKM
-          if [ -f build/from_checker.apk ]; then
-            if ! unzip -t build/from_checker.apk >/dev/null 2>&1; then
-              echo "from_checker.apk is not a valid ZIP, attempting APKM extraction..."
-              cp -f build/from_checker.apk build/from_checker.apkm || true
-              python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker_extracted.apk || true
-              if [ -f build/from_checker_extracted.apk ]; then mv -f build/from_checker_extracted.apk build/from_checker.apk; fi
-            fi
-          fi
-          if [ -f build/from_checker.apk ] && unzip -t build/from_checker.apk >/dev/null 2>&1; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
+          if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Try download APK from FALLBACK_APK_URL variable
         id: try_fallback_url
-        if: steps.apkmd.outputs.apk_path == '' && steps.try_dl.outputs.apk_path == ''
+        if: steps.try_dl.outputs.apk_path == '' && vars.FALLBACK_APK_URL != ''
         run: |
           mkdir -p build
           echo "Attempting to download APK from FALLBACK_APK_URL..."
-          URL="${{ inputs.fallback_apk_url }}"
-          if [ -z "$URL" ]; then URL="${{ vars.FALLBACK_APK_URL }}"; fi
-          if [ -z "$URL" ]; then echo "No fallback URL provided. Skipping this attempt."; exit 0; fi
+          URL="${{ vars.FALLBACK_APK_URL }}"
           EXT="apk"
           if [[ "$URL" == *.apkm ]]; then EXT="apkm"; fi
-          curl -L --fail -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" -H "Referer: https://www.apkmirror.com/" -o build/from_fallback_url.$EXT "$URL" || true
+          curl -L --fail -o build/from_fallback_url.$EXT "$URL" || true
           if [ -f build/from_fallback_url.apkm ]; then
             echo "Extracting from .apkm ..."
-            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url.apk || true
+            bash scripts/extract_from_apkm.sh --apkm build/from_fallback_url.apkm --out build/from_fallback_url.apk
           fi
-          if [ -f build/from_fallback_url.xapk ]; then
-            echo "Extracting from .xapk ..."
-            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.xapk --out build/from_fallback_url.apk || true
-          fi
-          # Validate APK; if invalid ZIP, try extracting as APKM
-          if [ -f build/from_fallback_url.apk ]; then
-            if ! unzip -t build/from_fallback_url.apk >/dev/null 2>&1; then
-              echo "from_fallback_url.apk is not a valid ZIP, attempting APKM extraction..."
-              cp -f build/from_fallback_url.apk build/from_fallback_url.apkm || true
-              python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url_extracted.apk || true
-              if [ -f build/from_fallback_url_extracted.apk ]; then mv -f build/from_fallback_url_extracted.apk build/from_fallback_url.apk; fi
-            fi
-          fi
-          if [ -f build/from_fallback_url.apk ] && unzip -t build/from_fallback_url.apk >/dev/null 2>&1; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
+          if [ -f build/from_fallback_url.apk ]; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Resolve APK path
         id: resolve_apk
         run: |
-          final_apk="${{ steps.apkmd.outputs.apk_path }}"
-          if [ -z "$final_apk" ]; then
-            final_apk="${{ steps.try_fallback_url.outputs.apk_path }}"
-          fi
+          final_apk="${{ steps.try_fallback_url.outputs.apk_path }}"
           if [ -z "$final_apk" ]; then
             final_apk="${{ steps.try_dl.outputs.apk_path }}"
           fi
@@ -229,17 +144,6 @@ jobs:
               mkdir -p build
               python scripts/extract_from_apkm.py --apkm "$apkm_cand" --out build/apkm_extracted.apk || true
               if [ -f build/apkm_extracted.apk ]; then final_apk="$(pwd)/build/apkm_extracted.apk"; fi
-            fi
-          fi
-          echo "Listing XAPK in workspace (for debugging):"
-          find . -type f -name "*.xapk" -printf "%s %p\n" 2>/dev/null | sort -nr | head -50 || true
-          if [ -z "$final_apk" ]; then
-            xapk_cand=$(find . -type f -name "*.xapk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
-            if [ -n "$xapk_cand" ] && [ -f "$xapk_cand" ]; then
-              echo "Extracting APK from $xapk_cand ..."
-              mkdir -p build
-              python scripts/extract_from_apkm.py --apkm "$xapk_cand" --out build/xapk_extracted.apk || true
-              if [ -f build/xapk_extracted.apk ]; then final_apk="$(pwd)/build/xapk_extracted.apk"; fi
             fi
           fi
           if [ -z "$final_apk" ]; then
@@ -297,12 +201,12 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.BLACKMAGIC_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.BLACKMAGIC_KEY_PASSWORD }}
         run: |
-          python scripts/decode_and_apply_patch.py \
+          bash scripts/decode_and_apply_patch.sh \
             --apk "${{ steps.resolve_apk.outputs.final_apk }}" \
             --apktool ./apktool.jar \
             --workdir build/work
 
-          python scripts/build_and_sign.py \
+          bash scripts/build_and_sign.sh \
             --decoded build/work/decoded_apk \
             --dist dist \
             --zipalign "$ZIPALIGN" \
@@ -317,11 +221,7 @@ jobs:
       - name: Fail if APK is unresolved
         if: (steps.check.outputs.has_update == 'true' || inputs.force == true) && steps.resolve_apk.outputs.final_apk == ''
         run: |
-          echo "ERROR: APK path could not be resolved." >&2
-          echo "Hints:" >&2
-          echo " - Provide an existing file via workflow input 'fallback_apk' (absolute or relative path)." >&2
-          echo " - Or provide a direct URL via input 'fallback_apk_url' or set repo variable FALLBACK_APK_URL." >&2
-          echo " - You can also re-run with 'force=false' to skip failure when APKMirror doesn't expose a direct download." >&2
+          echo "ERROR: APK path could not be resolved. Ensure fallback_apk exists or let checker download it." >&2
           exit 1
 
       - name: Upload artifacts
