@@ -77,6 +77,8 @@ jobs:
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
           download_url=$(jq -r '.download_url // ""' build/latest.json)
           echo "download_url=$download_url" >> $GITHUB_OUTPUT
+          download_page=$(jq -r '.download_page // ""' build/latest.json)
+          echo "download_page=$download_page" >> $GITHUB_OUTPUT
           package_type=$(jq -r '.package_type // "unknown"' build/latest.json)
           echo "package_type=$package_type" >> $GITHUB_OUTPUT
           note=$(jq -r '.note // ""' build/latest.json)
@@ -93,10 +95,16 @@ jobs:
             apkm) EXT="apkm" ;;
             xapk) EXT="xapk" ;;
           esac
-          curl -L --fail -o build/from_checker.$EXT "${{ steps.check.outputs.download_url }}" || true
+          REF="${{ steps.check.outputs.download_page }}"
+          if [ -z "$REF" ]; then REF="https://www.apkmirror.com/"; fi
+          curl -L --fail -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" -H "Referer: $REF" -o build/from_checker.$EXT "${{ steps.check.outputs.download_url }}" || true
           if [ -f build/from_checker.apkm ]; then
             echo "Extracting from .apkm ..."
-            python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker.apk
+            python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker.apk || true
+          fi
+          if [ -f build/from_checker.xapk ]; then
+            echo "Extracting from .xapk ..."
+            python scripts/extract_from_apkm.py --apkm build/from_checker.xapk --out build/from_checker.apk || true
           fi
           if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
@@ -109,10 +117,14 @@ jobs:
           URL="${{ vars.FALLBACK_APK_URL }}"
           EXT="apk"
           if [[ "$URL" == *.apkm ]]; then EXT="apkm"; fi
-          curl -L --fail -o build/from_fallback_url.$EXT "$URL" || true
+          curl -L --fail -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" -H "Referer: https://www.apkmirror.com/" -o build/from_fallback_url.$EXT "$URL" || true
           if [ -f build/from_fallback_url.apkm ]; then
             echo "Extracting from .apkm ..."
-            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url.apk
+            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url.apk || true
+          fi
+          if [ -f build/from_fallback_url.xapk ]; then
+            echo "Extracting from .xapk ..."
+            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.xapk --out build/from_fallback_url.apk || true
           fi
           if [ -f build/from_fallback_url.apk ]; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
 
@@ -144,6 +156,17 @@ jobs:
               mkdir -p build
               python scripts/extract_from_apkm.py --apkm "$apkm_cand" --out build/apkm_extracted.apk || true
               if [ -f build/apkm_extracted.apk ]; then final_apk="$(pwd)/build/apkm_extracted.apk"; fi
+            fi
+          fi
+          echo "Listing XAPK in workspace (for debugging):"
+          find . -type f -name "*.xapk" -printf "%s %p\n" 2>/dev/null | sort -nr | head -50 || true
+          if [ -z "$final_apk" ]; then
+            xapk_cand=$(find . -type f -name "*.xapk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
+            if [ -n "$xapk_cand" ] && [ -f "$xapk_cand" ]; then
+              echo "Extracting APK from $xapk_cand ..."
+              mkdir -p build
+              python scripts/extract_from_apkm.py --apkm "$xapk_cand" --out build/xapk_extracted.apk || true
+              if [ -f build/xapk_extracted.apk ]; then final_apk="$(pwd)/build/xapk_extracted.apk"; fi
             fi
           fi
           if [ -z "$final_apk" ]; then
