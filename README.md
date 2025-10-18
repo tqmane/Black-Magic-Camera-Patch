@@ -65,6 +65,23 @@ apksigner sign --ks <your-keystore>.jks --out .\dist\Blackmagic_Camera_mod_signe
 ```
 ※ `apksigner` は Android SDK build-tools に付属します。
 
+## CI / 自動化でAPK未解決になる場合の対処
+GitHub Actions の自動実行で以下のエラーになる場合があります:
+
+```
+ERROR: APK path could not be resolved.
+```
+
+対処方法:
+- ローカルに用意したAPKを使う: ワークフローの手動実行時に `fallback_apk` 入力でファイルパスを指定します。
+- 直接URLを指定する: `fallback_apk_url` 入力に .apk または .apkm の直リンクを指定します。
+- リポジトリ変数を使う: Settings → Variables and secrets → Repository variables で `FALLBACK_APK_URL` を作成し、有効なURLを設定します（手動入力が空のときに使用されます）。
+
+補足:
+- APKMirror が `.apkm` や `.xapk` のみを提供する場合、`.apkm` は自動で中から `.apk` を抽出します（`.xapk` も対応）。
+- `force=false` の場合、APK が解決できないときは「更新なし」として終了し、CI が失敗しにくくなっています。
+- 強制実行（`force=true`）時にAPK未解決だと失敗します。上記のいずれかの方法でAPKを供給してください。
+
 ## 検証状況
 - VerifyError による起動クラッシュが解消されたことをログで確認。
 - 起動および録画が可能であることを実機で確認（ユーザーレポート）。

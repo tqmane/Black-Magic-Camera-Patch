@@ -18,6 +18,10 @@ on:
         description: 'Path to local APK to use if download fails (optional)'
         required: false
         type: string
+      fallback_apk_url:
+        description: 'Direct URL to .apk/.apkm to use if APKMirror download fails (optional)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -110,11 +114,13 @@ jobs:
 
       - name: Try download APK from FALLBACK_APK_URL variable
         id: try_fallback_url
-        if: steps.try_dl.outputs.apk_path == '' && vars.FALLBACK_APK_URL != ''
+        if: steps.try_dl.outputs.apk_path == ''
         run: |
           mkdir -p build
           echo "Attempting to download APK from FALLBACK_APK_URL..."
-          URL="${{ vars.FALLBACK_APK_URL }}"
+          URL="${{ inputs.fallback_apk_url }}"
+          if [ -z "$URL" ]; then URL="${{ vars.FALLBACK_APK_URL }}"; fi
+          if [ -z "$URL" ]; then echo "No fallback URL provided. Skipping this attempt."; exit 0; fi
           EXT="apk"
           if [[ "$URL" == *.apkm ]]; then EXT="apkm"; fi
           curl -L --fail -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36" -H "Referer: https://www.apkmirror.com/" -o build/from_fallback_url.$EXT "$URL" || true
@@ -244,7 +250,11 @@ jobs:
       - name: Fail if APK is unresolved
         if: (steps.check.outputs.has_update == 'true' || inputs.force == true) && steps.resolve_apk.outputs.final_apk == ''
         run: |
-          echo "ERROR: APK path could not be resolved. Ensure fallback_apk exists or let checker download it." >&2
+          echo "ERROR: APK path could not be resolved." >&2
+          echo "Hints:" >&2
+          echo " - Provide an existing file via workflow input 'fallback_apk' (absolute or relative path)." >&2
+          echo " - Or provide a direct URL via input 'fallback_apk_url' or set repo variable FALLBACK_APK_URL." >&2
+          echo " - You can also re-run with 'force=false' to skip failure when APKMirror doesn't expose a direct download." >&2
           exit 1
 
       - name: Upload artifacts

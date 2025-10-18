@@ -24,6 +24,38 @@ HEADERS = {
     )
 }
 
+# Reuse a session with retries to make APKMirror flow more robust
+_SESSION: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is not None:
+        return _SESSION
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    try:
+        # Configure retries for transient network issues
+        from urllib3.util.retry import Retry
+        from requests.adapters import HTTPAdapter
+
+        retry = Retry(
+            total=5,
+            connect=3,
+            read=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+    except Exception:
+        # Best-effort; if unavailable, proceed without custom retries
+        pass
+    _SESSION = s
+    return s
+
 
 @dataclass
 class LatestInfo:
@@ -33,8 +65,12 @@ class LatestInfo:
     download_url: Optional[str]
 
 
-def _soup_get(url: str) -> BeautifulSoup:
-    resp = requests.get(url, headers=HEADERS, timeout=30)
+def _soup_get(url: str, referer: Optional[str] = None) -> BeautifulSoup:
+    s = _get_session()
+    headers = {}
+    if referer:
+        headers["Referer"] = referer
+    resp = s.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
     return BeautifulSoup(resp.text, "lxml")
 
@@ -142,35 +178,74 @@ def _find_download_page(variant_url: str) -> Optional[str]:
 
 
 def _resolve_final_download(download_page_url: str) -> Optional[str]:
-    # The download page usually has a button to the final URL (possibly on dl.apkmirror.com)
+    """Try to resolve the final direct download URL for APK/APKM/XAPK.
+
+    APKMirror often uses a two-step flow: variant page -> download page ->
+    a button pointing to dl.apkmirror.com or download.php which then redirects
+    to the actual CDN URL. We keep cookies and set Referer headers properly.
+    """
+    s = _get_session()
     soup = _soup_get(download_page_url)
-    # Try primary button first
-    a = soup.find("a", {"rel": "nofollow"}, href=True)
-    if not a:
+
+    # Prefer explicit nofollow button first
+    link = soup.find("a", {"rel": "nofollow"}, href=True)
+    if not link:
         # heuristic: any link with download.php or dl.apkmirror.com
-        a = soup.find("a", href=lambda h: h and ("download.php" in h or "dl.apkmirror.com" in h))
-    if not a:
+        link = soup.find("a", href=lambda h: h and ("download.php" in h or "dl.apkmirror.com" in h))
+    if not link:
         # fallback: any button-like link
-        a = soup.select_one("a.btn, a.button, a.downloadButton")
-    if not a or not a.get("href"):
+        link = soup.select_one("a.btn, a.button, a.downloadButton")
+    if not link or not link.get("href"):
         return None
-    href = a["href"]
-    url = href if href.startswith("http") else ("https://www.apkmirror.com" + href)
 
-    # Follow redirects to get the final CDN URL if possible
-    try:
-        with requests.get(url, headers=HEADERS, allow_redirects=True, stream=True, timeout=30) as r:
-            ct = (r.headers.get("Content-Type") or "").lower()
-            cd = (r.headers.get("Content-Disposition") or "").lower()
-            if ("application/vnd.android.package-archive" in ct) or ("application/octet-stream" in ct) or (".apk" in cd) or (".apkm" in cd):
-                return r.url
-    except Exception:
-        pass
-    return url
+    first_url = link["href"]
+    if not first_url.startswith("http"):
+        first_url = "https://www.apkmirror.com" + first_url
+
+    # Try a short chain of requests capturing redirects, with Referer set
+    current = first_url
+    referer = download_page_url
+    for _ in range(5):
+        try:
+            r = s.get(current, headers={"Referer": referer}, allow_redirects=False, timeout=30)
+        except Exception:
+            break
+        # If we already got a binary response, stop and use r.url
+        ct = (r.headers.get("Content-Type") or "").lower()
+        cd = (r.headers.get("Content-Disposition") or "").lower()
+        if ("application/vnd.android.package-archive" in ct) or ("application/octet-stream" in ct) or (".apk" in cd) or (".apkm" in cd) or (".xapk" in cd):
+            return r.url
+        # Follow Location header manually
+        loc = r.headers.get("Location")
+        if not loc:
+            # As a fallback, allow redirects once to resolve r.url
+            try:
+                r2 = s.get(current, headers={"Referer": referer}, allow_redirects=True, stream=True, timeout=30)
+                ct2 = (r2.headers.get("Content-Type") or "").lower()
+                cd2 = (r2.headers.get("Content-Disposition") or "").lower()
+                if ("application/vnd.android.package-archive" in ct2) or ("application/octet-stream" in ct2) or (".apk" in cd2) or (".apkm" in cd2) or (".xapk" in cd2):
+                    return r2.url
+                # If it looks like a final HTML without binary, break
+                break
+            except Exception:
+                break
+        # Absolute URL for next hop
+        if not loc.startswith("http"):
+            # Some redirects are relative to dl.apkmirror.com
+            from urllib.parse import urljoin
+            loc = urljoin(current, loc)
+        referer = current
+        current = loc
+
+    return current
 
 
-def _download_file(url: str, out_path: str) -> None:
-    with requests.get(url, headers=HEADERS, stream=True, timeout=60) as r:
+def _download_file(url: str, out_path: str, referer: Optional[str] = None) -> None:
+    s = _get_session()
+    headers = {}
+    if referer:
+        headers["Referer"] = referer
+    with s.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(out_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024 * 512):
@@ -254,13 +329,19 @@ def main() -> int:
     # Fallbacks
     if (not apk_path) and args.fallback_apk and os.path.isfile(args.fallback_apk):
         apk_path = os.path.abspath(args.fallback_apk)
+        # If user provided a fallback and wants to force, allow proceeding even if release existed
         has_update = True if args.force else has_update
 
     note = ""
-    if package_type in ("xapk",) and not apk_path and not args.force:
-        # Unsupported package from APKMirror without a provided fallback
-        has_update = False
-        note = f"unsupported_package_type:{package_type}"
+    # If we couldn't obtain an APK and we're not forcing, avoid marking as update to prevent CI failure
+    if not apk_path and not args.force:
+        if package_type in ("xapk",):
+            has_update = False
+            note = f"unsupported_package_type:{package_type}"
+        elif package_type in ("apkm", "apk"):
+            # Could not download or resolve
+            has_update = False
+            note = f"download_unresolved:{package_type}"
 
     payload = {
         "has_update": bool(has_update),
