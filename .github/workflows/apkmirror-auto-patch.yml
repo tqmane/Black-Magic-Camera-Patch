@@ -49,6 +49,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -88,6 +93,47 @@ jobs:
           note=$(jq -r '.note // ""' build/latest.json)
           echo "note=$note" >> $GITHUB_OUTPUT
 
+      - name: Try download via apkmirror-downloader
+        id: apkmd
+        if: steps.check.outputs.apk_path == ''
+        run: |
+          mkdir -p build
+          echo "Attempting download via apkmirror-downloader (APK)..."
+          npm i --no-save apkmirror-downloader@latest || true
+          cat > scripts/apkmd_fetch.mjs <<'EOF'
+          import { APKMirrorDownloader } from 'apkmirror-downloader';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const outDir = 'build';
+          const type = process.env.TYPE || 'apk';
+          const org = process.env.ORG || 'blackmagic-design';
+          const repo = process.env.REPO || 'blackmagic-camera';
+          const outFile = type === 'apk' ? 'from_apkmd.apk' : 'from_apkmd.apkm';
+          const downloader = new APKMirrorDownloader({ outDir, overwrite: true, arch: 'universal', dpi: 'nodpi' });
+          try {
+            await downloader.download({ org, repo }, { type, outFile });
+            const p = path.resolve(outDir, outFile);
+            if (fs.existsSync(p) && fs.statSync(p).size > 1024*1024) {
+              console.log('OK ' + p);
+              process.exit(0);
+            }
+          } catch (e) {
+            console.error('ERR', e?.message || e);
+          }
+          process.exit(2);
+          EOF
+          node scripts/apkmd_fetch.mjs || true
+          if [ -f build/from_apkmd.apk ]; then echo "apk_path=$(pwd)/build/from_apkmd.apk" >> $GITHUB_OUTPUT; fi
+          if [ ! -f build/from_apkmd.apk ]; then
+            echo "Attempting download via apkmirror-downloader (Bundle)..."
+            TYPE=bundle node scripts/apkmd_fetch.mjs || true
+          fi
+          if [ -f build/from_apkmd.apkm ]; then
+            echo "Extracting from .apkm (apkmd) ..."
+            python scripts/extract_from_apkm.py --apkm build/from_apkmd.apkm --out build/from_apkmd_extracted.apk || true
+          fi
+          if [ -f build/from_apkmd_extracted.apk ]; then echo "apk_path=$(pwd)/build/from_apkmd_extracted.apk" >> $GITHUB_OUTPUT; fi
+
       - name: Try download APK from checker URL
         id: try_dl
         if: (steps.check.outputs.apk_path == '' || endsWith(steps.check.outputs.apk_path, '.apkm')) && steps.check.outputs.download_url != ''
@@ -114,7 +160,7 @@ jobs:
 
       - name: Try download APK from FALLBACK_APK_URL variable
         id: try_fallback_url
-        if: steps.try_dl.outputs.apk_path == ''
+        if: steps.apkmd.outputs.apk_path == '' && steps.try_dl.outputs.apk_path == ''
         run: |
           mkdir -p build
           echo "Attempting to download APK from FALLBACK_APK_URL..."
@@ -137,7 +183,10 @@ jobs:
       - name: Resolve APK path
         id: resolve_apk
         run: |
-          final_apk="${{ steps.try_fallback_url.outputs.apk_path }}"
+          final_apk="${{ steps.apkmd.outputs.apk_path }}"
+          if [ -z "$final_apk" ]; then
+            final_apk="${{ steps.try_fallback_url.outputs.apk_path }}"
+          fi
           if [ -z "$final_apk" ]; then
             final_apk="${{ steps.try_dl.outputs.apk_path }}"
           fi

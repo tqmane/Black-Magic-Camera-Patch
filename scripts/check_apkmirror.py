@@ -339,9 +339,12 @@ def main() -> int:
             has_update = False
             note = f"unsupported_package_type:{package_type}"
         elif package_type in ("apkm", "apk"):
-            # Could not download or resolve
             has_update = False
             note = f"download_unresolved:{package_type}"
+        else:
+            # Unknown type or could not resolve any URL at all
+            has_update = False
+            note = "apk_unresolved:unknown_type"
 
     payload = {
         "has_update": bool(has_update),
