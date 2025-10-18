@@ -150,9 +150,23 @@ def _resolve_final_download(download_page_url: str) -> Optional[str]:
         # heuristic: any link with download.php or dl.apkmirror.com
         a = soup.find("a", href=lambda h: h and ("download.php" in h or "dl.apkmirror.com" in h))
     if not a:
+        # fallback: any button-like link
+        a = soup.select_one("a.btn, a.button, a.downloadButton")
+    if not a or not a.get("href"):
         return None
     href = a["href"]
-    return href if href.startswith("http") else ("https://www.apkmirror.com" + href)
+    url = href if href.startswith("http") else ("https://www.apkmirror.com" + href)
+
+    # Follow redirects to get the final CDN URL if possible
+    try:
+        with requests.get(url, headers=HEADERS, allow_redirects=True, stream=True, timeout=30) as r:
+            ct = (r.headers.get("Content-Type") or "").lower()
+            cd = (r.headers.get("Content-Disposition") or "").lower()
+            if ("application/vnd.android.package-archive" in ct) or ("application/octet-stream" in ct) or (".apk" in cd) or (".apkm" in cd):
+                return r.url
+    except Exception:
+        pass
+    return url
 
 
 def _download_file(url: str, out_path: str) -> None:
@@ -221,14 +235,18 @@ def main() -> int:
         elif url_lower.endswith(".xapk"):
             package_type = "xapk"
 
-    # Do not attempt to download non-APK packages
-    if has_update and final_url and package_type == "apk":
+    # Attempt to download both APK and APKM (we can extract APKM later)
+    if has_update and final_url and package_type in ("apk", "apkm"):
         try:
-            _download_file(final_url, args.download_out)
+            out_path = args.download_out
+            if package_type == "apkm":
+                base, _ = os.path.splitext(args.download_out)
+                out_path = base + ".apkm"
+            _download_file(final_url, out_path)
             # crude validation
-            if os.path.getsize(args.download_out) < 1024 * 1024:
+            if os.path.getsize(out_path) < 1024 * 1024:
                 raise RuntimeError("Downloaded file too small, likely not an APK.")
-            apk_path = args.download_out
+            apk_path = out_path
         except Exception as e:
             print(f"WARN: Failed to download APK: {e}")
             apk_path = ""
@@ -239,7 +257,7 @@ def main() -> int:
         has_update = True if args.force else has_update
 
     note = ""
-    if package_type in ("apkm", "xapk") and not apk_path and not args.force:
+    if package_type in ("xapk",) and not apk_path and not args.force:
         # Unsupported package from APKMirror without a provided fallback
         has_update = False
         note = f"unsupported_package_type:{package_type}"
