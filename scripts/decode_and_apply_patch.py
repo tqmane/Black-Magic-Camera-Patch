@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 
 
 def run(cmd, cwd=None):
@@ -28,6 +29,26 @@ def main() -> int:
     if not os.path.isfile(apk_path):
         print(f"ERROR: APK not found: {apk_path}")
         return 2
+
+    # If input is .apkm, extract an APK first
+    if apk_path.lower().endswith('.apkm'):
+        try:
+            with zipfile.ZipFile(apk_path, 'r') as z:
+                # Prefer base.apk else largest *.apk
+                names = [n for n in z.namelist() if n.lower().endswith('.apk')]
+                if not names:
+                    print('ERROR: No APK entries inside .apkm')
+                    return 2
+                base = [n for n in names if os.path.basename(n.lower()) == 'base.apk']
+                pick = base[0] if base else sorted(names, key=lambda n: z.getinfo(n).file_size, reverse=True)[0]
+                extract_dir = os.path.join(workdir, 'apkm_extract')
+                os.makedirs(extract_dir, exist_ok=True)
+                z.extract(pick, extract_dir)
+                apk_path = os.path.abspath(os.path.join(extract_dir, pick))
+                print(f"Extracted APK from .apkm: {apk_path}")
+        except Exception as e:
+            print(f"ERROR: Failed to extract .apkm: {e}")
+            return 2
 
     apktool_path = os.path.abspath(args.apktool)
     if not os.path.isfile(apktool_path):

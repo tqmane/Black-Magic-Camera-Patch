@@ -135,6 +135,17 @@ jobs:
           fi
           echo "Listing APKs in workspace (for debugging):"
           find . -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | head -50 || true
+          echo "Listing APKM in workspace (for debugging):"
+          find . -type f -name "*.apkm" -printf "%s %p\n" 2>/dev/null | sort -nr | head -50 || true
+          if [ -z "$final_apk" ]; then
+            apkm_cand=$(find . -type f -name "*.apkm" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
+            if [ -n "$apkm_cand" ] && [ -f "$apkm_cand" ]; then
+              echo "Extracting APK from $apkm_cand ..."
+              mkdir -p build
+              python scripts/extract_from_apkm.py --apkm "$apkm_cand" --out build/apkm_extracted.apk || true
+              if [ -f build/apkm_extracted.apk ]; then final_apk="$(pwd)/build/apkm_extracted.apk"; fi
+            fi
+          fi
           if [ -z "$final_apk" ]; then
             # last-resort: pick largest APK found in repo (recursive)
             cand=$(find . -type f -name "*.apk" -printf "%s %p\n" 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
