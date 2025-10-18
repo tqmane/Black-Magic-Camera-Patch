@@ -82,6 +82,10 @@ ERROR: APK path could not be resolved.
 - `force=false` の場合、APK が解決できないときは「更新なし」として終了し、CI が失敗しにくくなっています。
 - 強制実行（`force=true`）時にAPK未解決だと失敗します。上記のいずれかの方法でAPKを供給してください。
 
+### Downloader（APKMirror）の改善点
+- `scripts/check_apkmirror.sh` が APKMirror のリリース→バリアント→ダウンロードの導線を解析し、見つかったURLから自動で `.apk` または `.apkm` を取得します。
+- `.apkm` の場合は `scripts/extract_from_apkm.sh` により `base.apk` を抽出します。
+
 ## 検証状況
 - VerifyError による起動クラッシュが解消されたことをログで確認。
 - 起動および録画が可能であることを実機で確認（ユーザーレポート）。

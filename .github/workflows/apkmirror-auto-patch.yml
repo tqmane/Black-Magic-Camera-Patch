@@ -82,12 +82,12 @@ jobs:
           note=$(jq -r '.note // ""' build/latest.json)
           echo "note=$note" >> $GITHUB_OUTPUT
 
-      - name: Try download APK from checker URL
+      - name: Try download APK from checker URL (redundant safety)
         id: try_dl
-        if: (steps.check.outputs.apk_path == '' || endsWith(steps.check.outputs.apk_path, '.apkm')) && steps.check.outputs.download_url != ''
+        if: steps.check.outputs.apk_path == '' && steps.check.outputs.download_url != ''
         run: |
           mkdir -p build
-          echo "Attempting to download APK from checker-provided URL..."
+          echo "Attempting to download APK from checker-provided URL (redundant)..."
           EXT="apk"
           case "${{ steps.check.outputs.package_type }}" in
             apkm) EXT="apkm" ;;
@@ -142,7 +142,7 @@ jobs:
             if [ -n "$apkm_cand" ] && [ -f "$apkm_cand" ]; then
               echo "Extracting APK from $apkm_cand ..."
               mkdir -p build
-              python scripts/extract_from_apkm.py --apkm "$apkm_cand" --out build/apkm_extracted.apk || true
+              bash scripts/extract_from_apkm.sh --apkm "$apkm_cand" --out build/apkm_extracted.apk || true
               if [ -f build/apkm_extracted.apk ]; then final_apk="$(pwd)/build/apkm_extracted.apk"; fi
             fi
           fi

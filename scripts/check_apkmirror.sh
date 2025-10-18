@@ -143,6 +143,36 @@ if [ -z "$apk_path" ] && [ -n "$FALLBACK_APK" ] && [ -f "$FALLBACK_APK" ]; then
   apk_path="$(cd "$(dirname "$FALLBACK_APK")" && pwd)/$(basename "$FALLBACK_APK")"
 fi
 
+# Try to download from resolved URL if available
+if [ -z "$apk_path" ] && [ -n "$final_url" ] && [ "$package_type" != "unknown" ]; then
+  mkdir -p build
+  EXT="apk"
+  case "$package_type" in
+    apkm) EXT="apkm" ;;
+    xapk) EXT="xapk" ;;
+  esac
+  out_file="build/from_checker.$EXT"
+  echo "Attempting to download from resolved URL: $final_url" >&2
+  if curl -L --fail --retry 3 --retry-delay 2 -o "$out_file" "$final_url"; then
+    if [ -f "$out_file" ]; then
+      if [ "$EXT" = "apkm" ]; then
+        echo "Extracting base APK from .apkm ..." >&2
+        bash scripts/extract_from_apkm.sh --apkm "$out_file" --out build/from_checker.apk || true
+        if [ -f build/from_checker.apk ]; then
+          apk_path="$(pwd)/build/from_checker.apk"
+          note="downloaded_from_checker:apkm_extracted"
+        fi
+      elif [ "$EXT" = "apk" ]; then
+        apk_path="$(pwd)/$out_file"
+        note="downloaded_from_checker:apk"
+      else
+        # xapk unsupported unless forced elsewhere
+        :
+      fi
+    fi
+  fi
+fi
+
 # If only .xapk is available and no fallback, disable update unless forced
 if [ "$package_type" = "xapk" ] && [ -z "$apk_path" ] && [ "$FORCE" != "true" ]; then
   has_update=false
