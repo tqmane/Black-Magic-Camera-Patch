@@ -156,7 +156,16 @@ jobs:
             echo "Extracting from .xapk ..."
             python scripts/extract_from_apkm.py --apkm build/from_checker.xapk --out build/from_checker.apk || true
           fi
-          if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
+          # Validate APK; if invalid ZIP, try extracting as APKM
+          if [ -f build/from_checker.apk ]; then
+            if ! unzip -t build/from_checker.apk >/dev/null 2>&1; then
+              echo "from_checker.apk is not a valid ZIP, attempting APKM extraction..."
+              cp -f build/from_checker.apk build/from_checker.apkm || true
+              python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker_extracted.apk || true
+              if [ -f build/from_checker_extracted.apk ]; then mv -f build/from_checker_extracted.apk build/from_checker.apk; fi
+            fi
+          fi
+          if [ -f build/from_checker.apk ] && unzip -t build/from_checker.apk >/dev/null 2>&1; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Try download APK from FALLBACK_APK_URL variable
         id: try_fallback_url
@@ -178,7 +187,16 @@ jobs:
             echo "Extracting from .xapk ..."
             python scripts/extract_from_apkm.py --apkm build/from_fallback_url.xapk --out build/from_fallback_url.apk || true
           fi
-          if [ -f build/from_fallback_url.apk ]; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
+          # Validate APK; if invalid ZIP, try extracting as APKM
+          if [ -f build/from_fallback_url.apk ]; then
+            if ! unzip -t build/from_fallback_url.apk >/dev/null 2>&1; then
+              echo "from_fallback_url.apk is not a valid ZIP, attempting APKM extraction..."
+              cp -f build/from_fallback_url.apk build/from_fallback_url.apkm || true
+              python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url_extracted.apk || true
+              if [ -f build/from_fallback_url_extracted.apk ]; then mv -f build/from_fallback_url_extracted.apk build/from_fallback_url.apk; fi
+            fi
+          fi
+          if [ -f build/from_fallback_url.apk ] && unzip -t build/from_fallback_url.apk >/dev/null 2>&1; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Resolve APK path
         id: resolve_apk
