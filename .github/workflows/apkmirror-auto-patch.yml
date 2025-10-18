@@ -77,14 +77,27 @@ jobs:
           echo "apk_path=$apk_path" >> $GITHUB_OUTPUT
           download_url=$(jq -r '.download_url // ""' build/latest.json)
           echo "download_url=$download_url" >> $GITHUB_OUTPUT
+          package_type=$(jq -r '.package_type // "unknown"' build/latest.json)
+          echo "package_type=$package_type" >> $GITHUB_OUTPUT
+          note=$(jq -r '.note // ""' build/latest.json)
+          echo "note=$note" >> $GITHUB_OUTPUT
 
       - name: Try download APK from checker URL
         id: try_dl
-        if: steps.check.outputs.apk_path == '' && steps.check.outputs.download_url != ''
+        if: (steps.check.outputs.apk_path == '' || endsWith(steps.check.outputs.apk_path, '.apkm')) && steps.check.outputs.download_url != ''
         run: |
           mkdir -p build
           echo "Attempting to download APK from checker-provided URL..."
-          curl -L --fail -o build/from_checker.apk "${{ steps.check.outputs.download_url }}" || true
+          EXT="apk"
+          case "${{ steps.check.outputs.package_type }}" in
+            apkm) EXT="apkm" ;;
+            xapk) EXT="xapk" ;;
+          esac
+          curl -L --fail -o build/from_checker.$EXT "${{ steps.check.outputs.download_url }}" || true
+          if [ -f build/from_checker.apkm ]; then
+            echo "Extracting from .apkm ..."
+            python scripts/extract_from_apkm.py --apkm build/from_checker.apkm --out build/from_checker.apk
+          fi
           if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Try download APK from FALLBACK_APK_URL variable
@@ -93,7 +106,14 @@ jobs:
         run: |
           mkdir -p build
           echo "Attempting to download APK from FALLBACK_APK_URL..."
-          curl -L --fail -o build/from_fallback_url.apk "${{ vars.FALLBACK_APK_URL }}" || true
+          URL="${{ vars.FALLBACK_APK_URL }}"
+          EXT="apk"
+          if [[ "$URL" == *.apkm ]]; then EXT="apkm"; fi
+          curl -L --fail -o build/from_fallback_url.$EXT "$URL" || true
+          if [ -f build/from_fallback_url.apkm ]; then
+            echo "Extracting from .apkm ..."
+            python scripts/extract_from_apkm.py --apkm build/from_fallback_url.apkm --out build/from_fallback_url.apk
+          fi
           if [ -f build/from_fallback_url.apk ]; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
 
       - name: Resolve APK path
@@ -136,7 +156,11 @@ jobs:
       - name: Stop if no update
         if: steps.check.outputs.has_update != 'true' && inputs.force != true
         run: |
-          echo "No update found. Exiting."
+          if [ "${{ steps.check.outputs.package_type }}" = "apkm" ] || [ "${{ steps.check.outputs.package_type }}" = "xapk" ]; then
+            echo "No APK available (.${{ steps.check.outputs.package_type }} detected). Provide fallback_apk or FALLBACK_APK_URL." >&2
+          else
+            echo "No update found. Exiting."
+          fi
 
       - name: Detect keystore presence
         if: steps.check.outputs.has_update == 'true'

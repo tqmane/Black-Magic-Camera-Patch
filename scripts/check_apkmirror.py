@@ -208,7 +208,18 @@ def main() -> int:
     has_update = not exists
 
     apk_path = ""
-    if has_update and final_url:
+    package_type = "unknown"
+    if final_url:
+        url_lower = final_url.split("?")[0].lower()
+        if url_lower.endswith(".apk"):
+            package_type = "apk"
+        elif url_lower.endswith(".apkm"):
+            package_type = "apkm"
+        elif url_lower.endswith(".xapk"):
+            package_type = "xapk"
+
+    # Do not attempt to download non-APK packages
+    if has_update and final_url and package_type == "apk":
         try:
             _download_file(final_url, args.download_out)
             # crude validation
@@ -224,6 +235,12 @@ def main() -> int:
         apk_path = os.path.abspath(args.fallback_apk)
         has_update = True if args.force else has_update
 
+    note = ""
+    if package_type in ("apkm", "xapk") and not apk_path and not args.force:
+        # Unsupported package from APKMirror without a provided fallback
+        has_update = False
+        note = f"unsupported_package_type:{package_type}"
+
     payload = {
         "has_update": bool(has_update),
         "version": version,
@@ -231,6 +248,8 @@ def main() -> int:
         "variant_url": variant_url,
         "download_page": download_page,
         "download_url": final_url,
+        "package_type": package_type,
+        "note": note,
         "apk_path": apk_path,
     }
     with open(args.out, "w", encoding="utf-8") as f:
