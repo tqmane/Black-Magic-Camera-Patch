@@ -87,10 +87,22 @@ jobs:
           curl -L --fail -o build/from_checker.apk "${{ steps.check.outputs.download_url }}" || true
           if [ -f build/from_checker.apk ]; then echo "apk_path=$(pwd)/build/from_checker.apk" >> $GITHUB_OUTPUT; fi
 
+      - name: Try download APK from FALLBACK_APK_URL variable
+        id: try_fallback_url
+        if: steps.try_dl.outputs.apk_path == '' && vars.FALLBACK_APK_URL != ''
+        run: |
+          mkdir -p build
+          echo "Attempting to download APK from FALLBACK_APK_URL..."
+          curl -L --fail -o build/from_fallback_url.apk "${{ vars.FALLBACK_APK_URL }}" || true
+          if [ -f build/from_fallback_url.apk ]; then echo "apk_path=$(pwd)/build/from_fallback_url.apk" >> $GITHUB_OUTPUT; fi
+
       - name: Resolve APK path
         id: resolve_apk
         run: |
-          final_apk="${{ steps.try_dl.outputs.apk_path }}"
+          final_apk="${{ steps.try_fallback_url.outputs.apk_path }}"
+          if [ -z "$final_apk" ]; then
+            final_apk="${{ steps.try_dl.outputs.apk_path }}"
+          fi
           if [ -z "$final_apk" ]; then
             final_apk="${{ steps.check.outputs.apk_path }}"
           fi
